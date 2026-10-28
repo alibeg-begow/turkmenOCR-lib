@@ -195,3 +195,20 @@ def test_full_inspection_of_sharded_turkmen_weights(tmp_path, make_weights, monk
     assert report.variant is TURKMEN_OCR
     assert report.parameter_count == 8
     assert report.weight_map()[names[3]] == "model-00002-of-00002.safetensors"
+
+
+def test_expert_parameters_are_counted(tmp_path, make_weights, monkeypatch):
+    names = ["model.sam_model.a", "model.layers.1.mlp.experts.0.up_proj.weight", "model.layers.1.mlp.gate.weight"]
+    monkeypatch.setattr(inspector, "expected_tensor_names", lambda variant: frozenset(names))
+    sizes = {names[0]: ("BF16", [2]), names[1]: ("BF16", [6]), names[2]: ("BF16", [2])}
+    make_weights(tmp_path / "m.safetensors", sizes)
+    report = inspect_directory(tmp_path)
+    assert report.expert_parameter_count == 6
+    assert report.memory_required() == 20
+    assert report.memory_minimum() == 8
+
+
+def test_real_turkmen_expert_share():
+    names = expected_tensor_names(TURKMEN_OCR)
+    experts = [n for n in names if ".mlp.experts." in n]
+    assert len(experts) == 11 * 64 * 3

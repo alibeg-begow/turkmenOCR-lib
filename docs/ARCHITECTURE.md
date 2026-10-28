@@ -32,6 +32,8 @@ is written for contributors and maintainers.
   bundled assets and the user's weights.
 - `turkmenocr/engine.py`: the `TurkmenOCR` class, which loads the model and
   runs inference.
+- `turkmenocr/offload.py`: CPU placement of mixture-of-experts weights when
+  the GPU is too small for the whole model.
 - `turkmenocr/assets/turkmen_ocr/`: bundled configuration, tokenizer, shard
   index and model code for the TurkmenOCR architecture.
 
@@ -160,10 +162,36 @@ safely, and the user is asked to restart Python (`ENV-006`).
 
 ### Video memory and precision
 
-- Total memory must be at least 7.5 GiB. Cards sold as 8 GB report slightly
-  less than 8 GiB.
-- Free memory must cover the weights at two bytes per parameter (about
-  6.2 GiB) plus a 1 GiB reserve for activations and the key-value cache.
+- Total memory must be at least 5.5 GiB. Cards sold as 6 GB report slightly
+  less than 6 GiB.
+- When free memory covers the weights at two bytes per parameter (about
+  6.2 GiB) plus a 1.25 GiB reserve for activations and the key-value cache, the
+  whole model is loaded straight onto the GPU.
+- Otherwise `plan_gpu_budget` returns a weight budget of free memory minus
+  the reserve, and the model is placed partially (see below). The budget
+  must at least cover everything except the routed experts (about 1.7 GiB),
+  or the run stops with `ENV-004`.
+
+### Partial placement on small GPUs
+
+About 72 percent of the parameters are routed experts in the 11
+mixture-of-experts layers (64 experts per layer, 6 active per token). In
+partial mode, the model is first loaded into system memory. Then
+`offload.place_model` replaces experts with `CpuExpert` wrappers, round-robin
+across layers from the highest expert index, until the rest fits the
+budget. The rest of the model then moves to the GPU. A wrapper keeps its
+expert in float32 in system memory, outside the module registry, so
+`model.to(device)` does not move it. It receives only the hidden states of
+the tokens routed to it and returns its output on the GPU in the original
+dtype. The model's own `moe_infer` calls experts one by one, so no change to
+the model code is needed. Accelerate's offloading was not used because it
+would copy each offloaded layer's full weights over PCIe for every
+generated token.
+
+Measured on a GeForce GTX 1060 6 GB (5.1 GiB free, about half of the
+experts on the CPU): loading takes about 100 seconds, and an A4 page with
+nine lines of text takes 34 seconds in `gundam` mode (peak 5.08 GiB
+allocated) or 26 seconds in `base` mode (peak 4.58 GiB).
 - bfloat16 is used on compute capability 8.0 and newer. float16 is used on
   older cards, where bfloat16 is emulated or missing. The bundled model code
   takes its input dtype from the vision encoder's parameters, so both

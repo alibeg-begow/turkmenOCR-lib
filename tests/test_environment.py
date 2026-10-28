@@ -12,6 +12,7 @@ from turkmenocr.environment import (
     check_total_vram,
     parse_cuda_version,
     parse_gpu_csv,
+    plan_gpu_budget,
     select_torch_wheel,
 )
 
@@ -21,6 +22,7 @@ SMI_SUMMARY = """
 +-----------------------------------------------------------------------------------------+
 """
 
+GTX_1050 = GpuInfo(0, "NVIDIA GeForce GTX 1050 Ti", 4096 * 1024 * 1024, "582.28", (6, 1))
 GTX_1060 = GpuInfo(0, "NVIDIA GeForce GTX 1060", 6144 * 1024 * 1024, "582.28", (6, 1))
 RTX_3060 = GpuInfo(0, "NVIDIA GeForce RTX 3060", 12288 * 1024 * 1024, "560.94", (8, 6))
 RTX_3070 = GpuInfo(0, "NVIDIA GeForce RTX 3070", 8192 * 1024 * 1024, "560.94", (8, 6))
@@ -93,11 +95,36 @@ def test_torch_problem_detection():
 
 def test_small_card_is_rejected():
     with pytest.raises(TurkmenOCRError) as excinfo:
-        check_total_vram(GTX_1060)
+        check_total_vram(GTX_1050)
     assert excinfo.value.code == "ENV-003"
-    assert "6.0 GB" in excinfo.value.explanation
+    assert "4.0 GB" in excinfo.value.explanation
+    assert "at least 6 GB" in excinfo.value.explanation
+    check_total_vram(GTX_1060)
     check_total_vram(RTX_3060)
     check_total_vram(RTX_3070)
+
+
+GIB = 1024 ** 3
+WEIGHTS = int(6.2 * GIB)
+MINIMUM = int(1.7 * GIB)
+
+
+def test_whole_model_on_large_card():
+    assert plan_gpu_budget("RTX 3060", int(11 * GIB), 12 * GIB, WEIGHTS, MINIMUM) is None
+
+
+def test_partial_placement_on_six_gb_card():
+    budget = plan_gpu_budget("GTX 1060", int(5.6 * GIB), 6 * GIB, WEIGHTS, MINIMUM)
+    assert budget == int(5.6 * GIB) - environment.ACTIVATION_RESERVE
+    assert MINIMUM <= budget < WEIGHTS
+
+
+def test_too_little_free_memory():
+    with pytest.raises(TurkmenOCRError) as excinfo:
+        plan_gpu_budget("GTX 1060", int(2 * GIB), 6 * GIB, WEIGHTS, MINIMUM)
+    assert excinfo.value.code == "ENV-004"
+    assert "2.0 GB is free" in excinfo.value.explanation
+    assert plan_gpu_budget("GTX 1060", int(2 * GIB), 6 * GIB, WEIGHTS, MINIMUM, ignore_vram_check=True) == MINIMUM
 
 
 def test_missing_driver(monkeypatch):

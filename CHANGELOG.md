@@ -12,3 +12,5 @@ follows Keep a Changelog, and the project uses Semantic Versioning.
 - Automatic GPU detection, PyTorch CUDA installation and transformers 4.46 alignment.
 - Non-destructive workspace that combines bundled model files with user weights.
 - Plain-text, three-paragraph diagnostics for every anticipated failure.
+- Graphics cards with 6 GB of video memory are supported: when the model does
+  not fit, part of the mixture-of-experts weights runs on the CPU.

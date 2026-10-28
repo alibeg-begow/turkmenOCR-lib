@@ -126,6 +126,11 @@ class WeightsReport:
         return sum(info.numel for info in self.tensors.values())
 
     @property
+    def expert_parameter_count(self) -> int:
+        """Parameters in routed mixture-of-experts weights, which may run on the CPU."""
+        return sum(info.numel for key, info in self.tensors.items() if ".mlp.experts." in key)
+
+    @property
     def total_file_size(self) -> int:
         return sum(weight_file.size for weight_file in self.files)
 
@@ -139,6 +144,10 @@ class WeightsReport:
     def memory_required(self, bytes_per_parameter: int = 2) -> int:
         """Bytes needed to hold every tensor at the given precision."""
         return self.parameter_count * bytes_per_parameter
+
+    def memory_minimum(self, bytes_per_parameter: int = 2) -> int:
+        """Bytes that must be on the GPU when the routed experts run on the CPU."""
+        return (self.parameter_count - self.expert_parameter_count) * bytes_per_parameter
 
 
 @dataclass(frozen=True)

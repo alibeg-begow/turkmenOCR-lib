@@ -30,9 +30,10 @@ GIB = 1024 ** 3
 TRANSFORMERS_TARGET = "4.46.0"
 TRANSFORMERS_SERIES = "4.46."
 
-# 8 GB cards report slightly less than 8 GiB, so the gate sits a little lower.
-MIN_TOTAL_VRAM = int(7.5 * GIB)
-ACTIVATION_RESERVE = int(1.0 * GIB)
+# 6 GB cards report slightly less than 6 GiB, so the gate sits a little lower.
+MIN_TOTAL_VRAM = int(5.5 * GIB)
+# Measured peak for a tiled A4 page is about 0.9 GiB above the weights.
+ACTIVATION_RESERVE = int(1.25 * GIB)
 
 TORCH_VERSION = "2.7.1"
 TORCHVISION_VERSION = "0.22.1"
@@ -132,6 +133,7 @@ class RuntimeSettings:
     gpu_name: str
     total_bytes: int
     free_bytes: int
+    gpu_weight_budget: Optional[int] = None
 
     @property
     def device(self) -> str:
@@ -321,7 +323,7 @@ def require_gpu(device_index: int) -> Tuple[DriverInfo, GpuInfo]:
             "turkmenOCR-lib asked the NVIDIA driver tool (nvidia-smi) which "
             "graphics cards are installed, but the tool is missing or could not "
             "talk to a graphics card. TurkmenOCR runs only on NVIDIA graphics "
-            "cards with at least 8 GB of video memory, using NVIDIA's official "
+            "cards with at least 6 GB of video memory, using NVIDIA's official "
             "driver.",
             "Check that this computer has an NVIDIA graphics card and that its "
             "driver is installed.",
@@ -357,12 +359,12 @@ def check_total_vram(gpu: GpuInfo, total_bytes: Optional[int] = None) -> None:
         "ENV-003",
         "The graphics card does not have enough memory for TurkmenOCR.",
         f"The graphics card {gpu.name} has {format_size(total)} of video memory "
-        "in total. TurkmenOCR needs a card with at least 8 GB of video memory to "
+        "in total. TurkmenOCR needs a card with at least 6 GB of video memory to "
         "hold the model and process a page, so it cannot run on this card.",
         "Run turkmenOCR-lib on a computer with an NVIDIA graphics card that has "
-        "8 GB of video memory or more, for example a GeForce RTX 3060, RTX 3070, "
-        "RTX 4060, RTX 4070 or newer. If this computer has more than one "
-        "graphics card, select a larger one with the --gpu option.",
+        "6 GB of video memory or more, for example a GeForce GTX 1060 6 GB, RTX "
+        "2060, RTX 3060 or newer. If this computer has more than one graphics "
+        "card, select a larger one with the --gpu option.",
     )
 
 
@@ -545,8 +547,49 @@ def select_precision(device_index: int) -> str:
     return "float16"
 
 
+def plan_gpu_budget(
+    gpu_name: str,
+    free: int,
+    total: int,
+    required_bytes: int,
+    minimum_bytes: int,
+    ignore_vram_check: bool = False,
+) -> Optional[int]:
+    """Decide how many bytes of weights may be placed on the GPU.
+
+    Returns None when the whole model fits. Otherwise returns the byte budget
+    for weights on the GPU; the remaining expert weights run on the CPU.
+    ``minimum_bytes`` is the part of the model that must be on the GPU.
+    """
+    if free >= required_bytes + ACTIVATION_RESERVE:
+        return None
+    budget = free - ACTIVATION_RESERVE
+    if budget >= minimum_bytes:
+        return budget
+    if ignore_vram_check:
+        return minimum_bytes
+    needed = minimum_bytes + ACTIVATION_RESERVE
+    raise TurkmenOCRError(
+        "ENV-004",
+        "Not enough free video memory to load TurkmenOCR right now.",
+        f"The graphics card {gpu_name} has {format_size(total)} of video memory "
+        f"in total, but only {format_size(free)} is free at the moment. Even with "
+        "part of the model moved to the processor, loading it and processing a "
+        f"page needs at least {format_size(needed)}. Other programs are currently "
+        f"using the remaining {format_size(total - free)}.",
+        "Close programs that use the graphics card, such as web browsers, games, "
+        "video editors, other AI tools or Python notebooks, then run the command "
+        "again. Running nvidia-smi in a terminal lists the programs that are "
+        "currently using video memory.",
+    )
+
+
 def check_memory(
-    gpu: GpuInfo, device_index: int, required_bytes: int, ignore_vram_check: bool
+    gpu: GpuInfo,
+    device_index: int,
+    required_bytes: int,
+    minimum_bytes: int,
+    ignore_vram_check: bool,
 ) -> RuntimeSettings:
     import torch
 
@@ -554,32 +597,20 @@ def check_memory(
     free, total = torch.cuda.mem_get_info(device_index)
     if not ignore_vram_check:
         check_total_vram(gpu, total_bytes=properties.total_memory)
-        needed = required_bytes + ACTIVATION_RESERVE
-        if free < needed:
-            raise TurkmenOCRError(
-                "ENV-004",
-                "Not enough free video memory to load TurkmenOCR right now.",
-                f"The graphics card {properties.name} has {format_size(total)} of "
-                f"video memory in total, but only {format_size(free)} is free at "
-                f"the moment. Loading the model and processing a page needs about "
-                f"{format_size(needed)}. Other programs are currently using the "
-                f"remaining {format_size(total - free)}.",
-                "Close programs that use the graphics card, such as web browsers, "
-                "games, video editors, other AI tools or Python notebooks, then run "
-                "the command again. Running nvidia-smi in a terminal lists the "
-                "programs that are currently using video memory.",
-            )
+    budget = plan_gpu_budget(properties.name, free, total, required_bytes, minimum_bytes, ignore_vram_check)
     return RuntimeSettings(
         device_index=device_index,
         dtype_name=select_precision(device_index),
         gpu_name=properties.name,
         total_bytes=total,
         free_bytes=free,
+        gpu_weight_budget=budget,
     )
 
 
 def prepare_environment(
     required_bytes: int,
+    minimum_bytes: Optional[int] = None,
     device_index: int = 0,
     auto_install: bool = True,
     ignore_vram_check: bool = False,
@@ -595,4 +626,5 @@ def prepare_environment(
     ensure_support_packages(auto_install, reporter)
     ensure_transformers(auto_install, reporter)
     importlib.invalidate_caches()
-    return check_memory(gpu, device_index, required_bytes, ignore_vram_check)
+    minimum = required_bytes if minimum_bytes is None else minimum_bytes
+    return check_memory(gpu, device_index, required_bytes, minimum, ignore_vram_check)

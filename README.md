@@ -13,10 +13,13 @@ can on its own and explains in plain language how to fix anything it cannot.
 
 Hardware:
 
-- An NVIDIA graphics card with at least 8 GB of video memory, for example a
-  GeForce RTX 3060, RTX 3070, RTX 4060 or newer. Cards from the RTX 30 series
-  onward use bfloat16 precision. Older cards (GTX 10 and RTX 20 series) use
-  float16 automatically.
+- An NVIDIA graphics card with at least 6 GB of video memory, for example a
+  GeForce GTX 1060 6 GB, RTX 2060, RTX 3060 or newer. With 8 GB or more, the
+  whole model usually fits on the graphics card. With less, part of the model runs on
+  the processor automatically, which is slower but gives the same result.
+- Cards from the RTX 30 series onward use bfloat16 precision. Older cards
+  (GTX 10 and RTX 20 series) use float16 automatically.
+- At least 16 GB of system memory.
 - About 7 GB of free disk space for the weights, plus about 3 GB for PyTorch.
 
 Software:
@@ -156,15 +159,23 @@ text = recognize("/models/turkmen-ocr", "page.png")
 Every error message starts with a code in square brackets, such as
 `Error [ENV-003]`, followed by an explanation and the steps that fix it. The
 most common cases:
-- `ENV-001`: no working NVIDIA graphics card was found.: Install the latest driver from https://www.nvidia.com/Download/index.aspx,
-  restart, and confirm that `nvidia-smi` lists your card.
-- `ENV-003`: the graphics card has less than 8 GB of video memory.: TurkmenOCR does not fit on this card. Use a computer with a larger card.
-- `ENV-004`: not enough free video memory.: Close browsers, games and other programs that use the graphics card. The
-  `nvidia-smi` command lists the programs that are using video memory.
-- `RUNTIME-001`: out of memory while reading an image.: Add `--resolution base` or `--resolution small`, or use a smaller image.
-- `WEIGHTS-002`, `WEIGHTS-004`, `WEIGHTS-005`: missing or damaged weight files.: Download the file named in the message again.
-- `MODEL-001`: the folder holds a different model.: Point `-path` at the folder with the TurkmenOCR weights.
-- `WORKSPACE-001`: the tool could not link to the weights (Windows).: Turn on Developer Mode (Settings, Privacy and security, For developers), or
+
+- `ENV-001` (no working NVIDIA graphics card was found): install the latest
+  driver from https://www.nvidia.com/Download/index.aspx, restart, and
+  confirm that `nvidia-smi` lists your card.
+- `ENV-003` (the graphics card has less than 6 GB of video memory):
+  TurkmenOCR does not fit on this card. Use a computer with a larger card.
+- `ENV-004` (not enough free video memory): close browsers, games and other
+  programs that use the graphics card. The `nvidia-smi` command lists the
+  programs that are using video memory.
+- `RUNTIME-001` (out of memory while reading an image): add
+  `--resolution base` or `--resolution small`, or use a smaller image.
+- `WEIGHTS-002`, `WEIGHTS-004`, `WEIGHTS-005` (missing or damaged weight
+  files): download the file named in the message again.
+- `MODEL-001` (the folder holds a different model): point `-path` at the
+  folder with the TurkmenOCR weights.
+- `WORKSPACE-001` (the tool could not link to the weights, Windows only):
+  turn on Developer Mode (Settings, Privacy and security, For developers), or
   move the weights to the same drive as your user folder.
 
 ### Installing PyTorch manually

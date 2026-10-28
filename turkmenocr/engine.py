@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
 
 from .diagnostics import Reporter, TurkmenOCRError, format_size
-from .environment import RuntimeSettings, prepare_environment
+from .environment import ACTIVATION_RESERVE, RuntimeSettings, prepare_environment
 from .inspector import WeightsReport, inspect_directory
 from .validation import normalize_path, validate_image, validate_weights_dir
 from .workspace import prepare_workspace
@@ -113,6 +113,7 @@ class TurkmenOCR:
 
         self.settings: RuntimeSettings = prepare_environment(
             required_bytes=self.report.memory_required(bytes_per_parameter=2),
+            minimum_bytes=self.report.memory_minimum(bytes_per_parameter=2),
             device_index=gpu,
             auto_install=auto_install,
             ignore_vram_check=ignore_vram_check,
@@ -137,15 +138,19 @@ class TurkmenOCR:
         with prepare_workspace(self.report, self.reporter) as workspace, _quiet_runtime():
             try:
                 self._tokenizer = AutoTokenizer.from_pretrained(str(workspace.path), trust_remote_code=True)
+                budget = self.settings.gpu_weight_budget
+                placement = {"device_map": {"": self.settings.device_index}} if budget is None else {}
                 self._model = AutoModel.from_pretrained(
                     str(workspace.path),
                     trust_remote_code=True,
                     use_safetensors=True,
                     torch_dtype=dtype,
                     low_cpu_mem_usage=True,
-                    device_map={"": self.settings.device_index},
                     attn_implementation="eager",
+                    **placement,
                 ).eval()
+                if budget is not None:
+                    self._place_partially(budget)
             except torch.cuda.OutOfMemoryError as exc:
                 self.close()
                 raise self._out_of_memory_error(during="loading the model") from exc
@@ -162,6 +167,19 @@ class TurkmenOCR:
                     "weights again, because one of the files may have been altered "
                     "after it was saved.",
                 ) from exc
+
+    def _place_partially(self, budget: int) -> None:
+        from .offload import place_model
+
+        offloaded, total = place_model(self._model, self.settings.device, budget)
+        share = offloaded / total if total else 0.0
+        self.reporter.warning(
+            f"Only {format_size(self.settings.free_bytes)} of video memory is free, "
+            f"which is less than the {format_size(self.report.memory_required() + ACTIVATION_RESERVE)} "
+            f"needed to keep the whole model on the graphics card. {offloaded} of "
+            f"{total} expert blocks ({share:.0%}) will run on the processor instead, "
+            "so reading will be slower."
+        )
 
     def recognize(
         self,

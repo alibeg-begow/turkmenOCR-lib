@@ -18,7 +18,7 @@ from .diagnostics import EXIT_INTERNAL, EXIT_INTERRUPTED, Reporter, TurkmenOCREr
 
 DESCRIPTION = (
     "Recognise text in an image with the TurkmenOCR model, running locally on "
-    "an NVIDIA graphics card with at least 8 GB of video memory."
+    "an NVIDIA graphics card with at least 6 GB of video memory."
 )
 
 EPILOG = """examples:
@@ -78,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ignore-vram-check", action="store_true",
-        help="skip the 8 GB video memory check (the model may fail to load)",
+        help="skip the 6 GB video memory check (the model may fail to load)",
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="print only errors and the recognised text")
     parser.add_argument("--debug", action="store_true", help="show full Python tracebacks for errors")
