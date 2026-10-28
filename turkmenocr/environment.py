@@ -9,6 +9,7 @@ remaining packages aligned with the versions the model code was written for.
 
 from __future__ import annotations
 
+import ctypes
 import importlib
 import importlib.util
 import json
@@ -207,10 +208,56 @@ def find_nvidia_smi() -> Optional[str]:
     return None
 
 
+# Conservative minimum CUDA version shipped by each NVIDIA driver branch across
+# Windows and Linux, used only when nvidia-smi and the CUDA driver library both
+# fail to report a version (for example on idle Optimus laptop GPUs).
+_DRIVER_CUDA_FLOORS: Tuple[Tuple[Tuple[int, int], Tuple[int, int]], ...] = (
+    ((615, 0), (13, 4)),
+    ((580, 0), (13, 0)),
+    ((570, 65), (12, 8)),
+    ((560, 76), (12, 6)),
+    ((550, 54), (12, 4)),
+    ((535, 54), (12, 2)),
+    ((527, 41), (12, 0)),
+    ((522, 6), (11, 8)),
+)
+
+
 def parse_cuda_version(text: str) -> Optional[Tuple[int, int]]:
-    """Extract the highest CUDA version the driver supports from nvidia-smi output."""
-    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", text)
+    """Extract the highest CUDA version the driver supports from nvidia-smi output.
+
+    Drivers prior to the 590 branch print ``CUDA Version: X.Y``, whereas 590 and
+    newer branches (such as 617.42) print ``CUDA UMD Version: X.Y``.
+    """
+    match = re.search(r"CUDA(?:\s+[A-Za-z]+)*\s+Version\s*:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
     return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def query_cuda_driver_api() -> Optional[Tuple[int, int]]:
+    """Query cuDriverGetVersion directly from the NVIDIA CUDA driver library."""
+    names = ("nvcuda.dll",) if os.name == "nt" else ("libcuda.so.1", "libcuda.so")
+    loader = getattr(ctypes, "WinDLL", ctypes.CDLL) if os.name == "nt" else ctypes.CDLL
+    for name in names:
+        try:
+            library = loader(name)
+            raw = ctypes.c_int(0)
+            if library.cuDriverGetVersion(ctypes.byref(raw)) == 0 and raw.value > 0:
+                return (raw.value // 1000, (raw.value % 1000) // 10)
+        except Exception:
+            continue
+    return None
+
+
+def infer_cuda_from_driver(driver_version: str) -> Optional[Tuple[int, int]]:
+    """Infer a conservative CUDA floor from an NVIDIA driver version string."""
+    match = re.match(r"\s*(\d+)\.(\d+)", driver_version or "")
+    if not match:
+        return None
+    branch = (int(match.group(1)), int(match.group(2)))
+    for minimum_branch, cuda in _DRIVER_CUDA_FLOORS:
+        if branch >= minimum_branch:
+            return cuda
+    return None
 
 
 def parse_gpu_csv(text: str) -> List[GpuInfo]:
@@ -241,8 +288,6 @@ def query_driver() -> Optional[DriverInfo]:
         return None
     try:
         summary = _run([executable], timeout=60)
-        if summary.returncode != 0:
-            return None
         fields = "index,name,memory.total,driver_version"
         query = _run(
             [executable, f"--query-gpu={fields},compute_cap", "--format=csv,noheader,nounits"],
@@ -255,7 +300,13 @@ def query_driver() -> Optional[DriverInfo]:
     gpus = parse_gpu_csv(query.stdout) if query.returncode == 0 else []
     if not gpus:
         return None
-    return DriverInfo(gpus=gpus, cuda_version=parse_cuda_version(summary.stdout))
+    summary_text = summary.stdout if summary.returncode == 0 else ""
+    cuda_version = (
+        parse_cuda_version(summary_text)
+        or query_cuda_driver_api()
+        or infer_cuda_from_driver(gpus[0].driver_version)
+    )
+    return DriverInfo(gpus=gpus, cuda_version=cuda_version)
 
 
 def select_torch_wheel(
@@ -292,7 +343,7 @@ def arch_supported(capability: Optional[Tuple[int, int]], arch_list: Sequence[st
         return True
     major, minor = capability
     for arch in arch_list:
-        match = re.match(r"(sm|compute)_(\d+)(\d)$", arch)
+        match = re.match(r"(sm|compute)_(\d+)(\d)[a-z]?$", arch)
         if not match:
             continue
         kind, arch_major, arch_minor = match.group(1), int(match.group(2)), int(match.group(3))
@@ -424,11 +475,12 @@ def ensure_torch(driver: DriverInfo, gpu: GpuInfo, auto_install: bool, reporter:
         return probe
 
     check_python_version()
-    wheel = select_torch_wheel(driver.cuda_version, gpu.compute_capability)
+    cuda_version = driver.cuda_version or infer_cuda_from_driver(gpu.driver_version)
+    wheel = select_torch_wheel(cuda_version, gpu.compute_capability)
     if wheel is None:
         cuda_text = (
-            f"CUDA {driver.cuda_version[0]}.{driver.cuda_version[1]}"
-            if driver.cuda_version
+            f"CUDA {cuda_version[0]}.{cuda_version[1]}"
+            if cuda_version
             else "an unknown CUDA version"
         )
         raise TurkmenOCRError(
@@ -672,9 +724,10 @@ def describe_gpu(driver: DriverInfo, gpu: GpuInfo) -> str:
         if gpu.compute_capability
         else ""
     )
+    cuda_version = driver.cuda_version or infer_cuda_from_driver(gpu.driver_version)
     cuda = (
-        f"supports CUDA up to {driver.cuda_version[0]}.{driver.cuda_version[1]}"
-        if driver.cuda_version
+        f"supports CUDA up to {cuda_version[0]}.{cuda_version[1]}"
+        if cuda_version
         else "does not report a CUDA version"
     )
     return (

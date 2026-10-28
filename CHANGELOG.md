@@ -5,6 +5,16 @@ follows Keep a Changelog, and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-28
+
+### Fixed
+
+- Fixed false `ENV-002` ("The NVIDIA driver is too old") errors on NVIDIA 590
+  and newer driver branches (such as 617.42) and on Optimus laptop GPUs where
+  `nvidia-smi` prints `CUDA UMD Version` instead of `CUDA Version` or reports
+  `N/A`. CUDA support is now also queried directly from the NVIDIA CUDA driver
+  library (`cuDriverGetVersion`), with a fallback to the driver release branch.
+
 ## [0.2.0] - 2026-10-28
 
 ### Added
@@ -38,5 +48,6 @@ follows Keep a Changelog, and the project uses Semantic Versioning.
 - Graphics cards with 6 GB of video memory are supported: when the model does
   not fit, part of the mixture-of-experts weights runs on the CPU.
 
+[0.2.1]: https://github.com/alibeg-begow/turkmenOCR-lib/releases/tag/v0.2.1
 [0.2.0]: https://github.com/alibeg-begow/turkmenOCR-lib/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alibeg-begow/turkmenOCR-lib/releases/tag/v0.1.0

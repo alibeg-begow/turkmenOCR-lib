@@ -144,10 +144,14 @@ process imports PyTorch only after any reinstall has finished.
 
 ### Choosing a PyTorch build
 
-The CUDA version supported by the driver comes from the `nvidia-smi` banner.
-The compute capability comes from `--query-gpu=compute_cap` (with a fallback
-query for old drivers that lack this field). The choice is made in
-`select_torch_wheel`:
+The CUDA version supported by the driver comes from the `nvidia-smi` banner
+(`CUDA Version` on older drivers and `CUDA UMD Version` on 590 and newer
+branches). When `nvidia-smi` reports `N/A`, for example on idle Optimus laptop
+graphics cards, `cuDriverGetVersion` in the NVIDIA CUDA driver library is
+queried directly, with a conservative fallback table keyed by the driver
+release branch. The compute capability comes from `--query-gpu=compute_cap`
+(with a fallback query for old drivers that lack this field). The choice is
+made in `select_torch_wheel`:
 
 - Compute capability 10.0 or higher (Blackwell): `cu128`, which needs a
   driver that supports CUDA 12.8.

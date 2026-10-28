@@ -10,6 +10,7 @@ from turkmenocr.environment import (
     TorchProbe,
     arch_supported,
     check_total_vram,
+    infer_cuda_from_driver,
     parse_cuda_version,
     parse_gpu_csv,
     plan_gpu_budget,
@@ -22,10 +23,23 @@ SMI_SUMMARY = """
 +-----------------------------------------------------------------------------------------+
 """
 
+SMI_R615_SUMMARY = """
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 617.42                 KMD Version: 617.42            CUDA UMD Version: 13.4 |
++-----------------------------------------------------------------------------------------+
+"""
+
+SMI_OPTIMUS_NA_SUMMARY = """
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 617.42                 KMD Version: 617.42            CUDA UMD Version: N/A  |
++-----------------------------------------------------------------------------------------+
+"""
+
 GTX_1050 = GpuInfo(0, "NVIDIA GeForce GTX 1050 Ti", 4096 * 1024 * 1024, "582.28", (6, 1))
 GTX_1060 = GpuInfo(0, "NVIDIA GeForce GTX 1060", 6144 * 1024 * 1024, "582.28", (6, 1))
 RTX_3060 = GpuInfo(0, "NVIDIA GeForce RTX 3060", 12288 * 1024 * 1024, "560.94", (8, 6))
 RTX_3070 = GpuInfo(0, "NVIDIA GeForce RTX 3070", 8192 * 1024 * 1024, "560.94", (8, 6))
+RTX_3070_LAPTOP = GpuInfo(0, "NVIDIA GeForce RTX 3070 Laptop GPU", 8192 * 1024 * 1024, "617.42", (8, 6))
 QUIET = Reporter(quiet=True)
 
 
@@ -35,8 +49,42 @@ def completed(returncode=0, stdout="", stderr=""):
 
 def test_parse_cuda_version():
     assert parse_cuda_version(SMI_SUMMARY) == (12, 6)
+    assert parse_cuda_version(SMI_R615_SUMMARY) == (13, 4)
     assert parse_cuda_version("CUDA Version: 13.0") == (13, 0)
+    assert parse_cuda_version("CUDA UMD Version   : 13.4") == (13, 4)
+    assert parse_cuda_version(SMI_OPTIMUS_NA_SUMMARY) is None
+    assert parse_cuda_version("CUDA Version: N/A") is None
     assert parse_cuda_version("no driver") is None
+
+
+@pytest.mark.parametrize(
+    "driver_version, expected",
+    [
+        ("617.42", (13, 4)),
+        ("591.59", (13, 0)),
+        ("582.28", (13, 0)),
+        ("572.16", (12, 8)),
+        ("560.94", (12, 6)),
+        ("535.104.05", (12, 2)),
+        ("522.06", (11, 8)),
+        ("470.82.01", None),
+        ("N/A", None),
+    ],
+)
+def test_infer_cuda_from_driver(driver_version, expected):
+    assert infer_cuda_from_driver(driver_version) == expected
+
+
+def test_query_driver_falls_back_when_smi_omits_cuda_version(monkeypatch):
+    csv_row = "0, NVIDIA GeForce RTX 3070 Laptop GPU, 8192, 617.42, 8.6\n"
+    outputs = iter([completed(0, SMI_OPTIMUS_NA_SUMMARY), completed(0, csv_row)])
+    monkeypatch.setattr(environment, "find_nvidia_smi", lambda: "nvidia-smi")
+    monkeypatch.setattr(environment, "_run", lambda cmd, timeout=None: next(outputs))
+    monkeypatch.setattr(environment, "query_cuda_driver_api", lambda: None)
+    driver = environment.query_driver()
+    assert driver is not None
+    assert driver.cuda_version == (13, 4)
+    assert driver.gpus[0].driver_version == "617.42"
 
 
 def test_parse_gpu_csv_with_and_without_compute_capability():
@@ -92,6 +140,7 @@ def test_arch_supported():
     assert arch_supported((8, 9), ["sm_80", "sm_86"])
     assert not arch_supported((6, 1), ["sm_75", "sm_80", "sm_90", "sm_120"])
     assert arch_supported((12, 0), ["sm_90", "compute_90"])
+    assert arch_supported((12, 0), ["sm_90a", "sm_120a"])
     assert arch_supported(None, ["sm_80"])
 
 
@@ -160,6 +209,20 @@ def test_old_driver_cannot_get_torch(monkeypatch):
     with pytest.raises(TurkmenOCRError) as excinfo:
         environment.ensure_torch(DriverInfo([RTX_3060], (11, 4)), RTX_3060, True, QUIET)
     assert excinfo.value.code == "ENV-002"
+
+
+def test_modern_driver_without_reported_cuda_still_selects_wheel(monkeypatch):
+    probes = iter([
+        TorchProbe(),
+        TorchProbe(installed=True, version="2.7.1+cu126", cuda_build="12.6", cuda_available=True,
+                   arch_list=["sm_86"], torchvision="0.22.1"),
+    ])
+    calls = []
+    monkeypatch.setattr(environment, "probe_torch", lambda: next(probes))
+    monkeypatch.setattr(environment, "pip_install", lambda args: calls.append(list(args)) or completed())
+    environment.ensure_torch(DriverInfo([RTX_3070_LAPTOP], None), RTX_3070_LAPTOP, True, QUIET)
+    release = environment.torch_release_for()
+    assert calls[0][:2] == [f"torch=={release.torch}+cu126", f"torchvision=={release.torchvision}+cu126"]
 
 
 def test_torch_install_disabled(monkeypatch):
