@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "turkmenOCR-lib"
+dynamic = ["version"]
+description = "Run the TurkmenOCR text recognition model locally on NVIDIA GPUs from raw .safetensors weights."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE", "turkmenocr/assets/turkmen_ocr/LICENSE"]
+authors = [{ name = "alibeg-begow", email = "alibegbegow@gmail.com" }]
+keywords = ["ocr", "turkmen", "text-recognition", "safetensors", "cuda", "vision-language"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "pillow>=9.0",
+    "transformers>=4.46.0,<4.47",
+    "accelerate>=0.26.0",
+    "safetensors>=0.4.3",
+    "einops",
+    "addict",
+    "easydict",
+    "requests",
+    "numpy",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pillow>=9.0"]
+dev = ["pytest>=7", "pillow>=9.0", "ruff>=0.6", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/alibeg-begow/turkmenOCR-lib"
+Issues = "https://github.com/alibeg-begow/turkmenOCR-lib/issues"
+Changelog = "https://github.com/alibeg-begow/turkmenOCR-lib/blob/main/CHANGELOG.md"
+
+[project.scripts]
+turkmenocr = "turkmenocr.cli:main"
+turkmenOCR-lib = "turkmenocr.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["turkmenocr"]
+
+[tool.setuptools.package-data]
+turkmenocr = ["assets/*/*.json", "assets/*/*.py", "assets/*/LICENSE"]
+
+[tool.setuptools.dynamic]
+version = { attr = "turkmenocr.__version__" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["turkmenocr/assets", "Turkmen-OCR-model"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
