@@ -22,8 +22,13 @@ DESCRIPTION = (
 )
 
 EPILOG = """examples:
+  turkmenocr --setup
   turkmenocr -path="/models/turkmen-ocr" -img="page.png"
   turkmenocr --path D:\\models\\turkmen-ocr --img scan.jpg --task markdown > page.md
+
+Run turkmenocr --setup once after installation. It detects the graphics card,
+the driver and its CUDA version, and installs the matching GPU build of
+PyTorch. The first recognition run does the same if this step is skipped.
 
 The recognised text is written to standard output. Messages about progress
 and problems are written to standard error.
@@ -51,11 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     parser.add_argument(
-        "-path", "--path", dest="path", required=True, metavar="DIR",
+        "-path", "--path", dest="path", metavar="DIR",
         help="folder that contains the TurkmenOCR .safetensors weight files",
     )
     parser.add_argument(
-        "-img", "--img", dest="img", required=True, metavar="FILE",
+        "-img", "--img", dest="img", metavar="FILE",
         help="image to read (PNG, JPEG, BMP, TIFF or WebP)",
     )
     parser.add_argument(
@@ -70,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-new-tokens", type=int, default=4096, metavar="N",
         help="maximum length of the generated text in tokens (default: 4096)",
+    )
+    parser.add_argument(
+        "--setup", action="store_true",
+        help="detect the graphics card and install the matching GPU build of PyTorch, then exit",
     )
     parser.add_argument("--gpu", type=int, default=0, metavar="INDEX", help="graphics card number to use (default: 0)")
     parser.add_argument(
@@ -96,13 +105,26 @@ def _configure_streams() -> None:
                 pass
 
 
+def _auto_install(args: argparse.Namespace) -> bool:
+    return not args.no_install and os.environ.get("TURKMENOCR_NO_INSTALL", "") not in ("1", "true", "yes")
+
+
+def run_setup(args: argparse.Namespace, reporter: Reporter) -> int:
+    from .environment import setup_runtime
+
+    summary = setup_runtime(args.gpu, _auto_install(args), reporter)
+    reporter.quiet = False
+    reporter.info(summary)
+    return 0
+
+
 def run(args: argparse.Namespace, reporter: Reporter) -> int:
     from .engine import TurkmenOCR
     from .validation import normalize_path, validate_image, validate_weights_dir
 
     weights = validate_weights_dir(normalize_path(args.path))
     image = validate_image(normalize_path(args.img))
-    auto_install = not args.no_install and os.environ.get("TURKMENOCR_NO_INSTALL", "") not in ("1", "true", "yes")
+    auto_install = _auto_install(args)
 
     with TurkmenOCR(
         weights,
@@ -129,8 +151,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     debug = "--debug" in (argv if argv is not None else sys.argv[1:])
     reporter = Reporter()
     try:
-        args = build_parser().parse_args(argv)
+        parser = build_parser()
+        args = parser.parse_args(argv)
         reporter.quiet = args.quiet
+        if args.setup:
+            return run_setup(args, reporter)
+        missing = [name for name, value in (("-path/--path", args.path), ("-img/--img", args.img)) if not value]
+        if missing:
+            parser.error("the following arguments are required: " + ", ".join(missing))
         return run(args, reporter)
     except TurkmenOCRError as error:
         if debug:

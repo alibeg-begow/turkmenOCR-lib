@@ -27,13 +27,28 @@ Software:
 - Windows 10 or 11, or Linux.
 - The official NVIDIA driver. Running `nvidia-smi` in a terminal must print a
   table that lists your graphics card.
-- Python 3.9 to 3.13. Python 3.12 is recommended.
+- Python 3.9 to 3.14. Python 3.12 is recommended.
 
 ## Installation
 
+Installation takes two commands:
+
 ```
 pip install turkmenOCR-lib
+turkmenocr --setup
 ```
+
+`pip install` does not download PyTorch. The PyTorch package that pip would
+pick on its own is a CPU-only build on Windows, and it cannot use the
+graphics card. Instead, `turkmenocr --setup` checks the computer and prints
+what it finds: the graphics card, its video memory and compute capability,
+the NVIDIA driver version and the newest CUDA version that driver supports.
+It then installs the GPU build of PyTorch that best matches all of these (a
+one-time download of about 3 GB), together with the remaining packages the
+model needs. If a CPU-only PyTorch is already installed, it is replaced.
+
+If you skip `turkmenocr --setup`, the first recognition run performs the same
+steps automatically.
 
 We recommend installing into a virtual environment:
 
@@ -42,12 +57,11 @@ python -m venv turkmenocr-env
 turkmenocr-env\Scripts\activate          (Windows)
 source turkmenocr-env/bin/activate       (Linux)
 pip install turkmenOCR-lib
+turkmenocr --setup
 ```
 
-On first use, the tool installs the GPU build of PyTorch that matches your
-driver and graphics card (a download of about 3 GB). It also makes sure
-`transformers` 4.46 is installed. This happens once. To install these
-packages yourself, see "Installing PyTorch manually" below.
+To install the packages yourself instead, see "Installing PyTorch manually"
+below.
 
 ## Preparing the weights
 
@@ -91,6 +105,9 @@ but never end up in the saved file.
   the best accuracy. `base` or `small` use less video memory and run faster.
 - `--prompt TEXT`: A custom instruction for the model, replacing `--task`.
 - `--max-new-tokens N`: Maximum length of the generated text. The default is 4096.
+- `--setup`: Detect the graphics card and driver, install the matching GPU
+  build of PyTorch and the other runtime packages, then exit. `-path` and
+  `-img` are not needed.
 - `--gpu INDEX`: Graphics card to use when the computer has more than one. The default is 0.
 - `--no-install`: Never install or change Python packages. If something is missing, print
   the command that installs it. The environment variable
@@ -189,8 +206,10 @@ python -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://downl
 python -m pip install transformers==4.46.0
 ```
 
-For RTX 50 series cards, use `cu128` instead of `cu126`. With a driver older
-than CUDA 12.6, use `cu118`.
+On Python 3.14, use `torch==2.9.1 torchvision==0.24.1` and
+`transformers==4.47.1` instead. For RTX 50 series cards, use `cu128` instead
+of `cu126`. With a driver older than CUDA 12.6, use `cu118` (not available
+for Python 3.14).
 
 ### Cache location
 

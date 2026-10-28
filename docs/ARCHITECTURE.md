@@ -53,8 +53,11 @@ get exceptions, never prints.
    image (exists, is a file, is not a PDF or HEIC, decodes completely with
    Pillow).
 4. Inspect the weights (described below). No third-party library is used.
-5. Query `nvidia-smi`. A missing driver, a missing card index or a card below
-   the video memory minimum stops the run here, before any download.
+5. Query `nvidia-smi` and report the card, its video memory and compute
+   capability, the driver version and the newest CUDA version it supports.
+   A missing driver, a missing card index or a card below the video memory
+   minimum stops the run here, before any download. `turkmenocr --setup` runs
+   steps 5 to 7 on their own and then exits.
 6. Probe PyTorch in a child process, and install the matching CUDA build if
    required.
 7. Install any missing helper packages, then align `transformers` with the
@@ -120,6 +123,17 @@ and full shard index, and a fingerprint rule in `identify_variant`.
 
 ## Environment management
 
+### Why PyTorch is not an install-time dependency
+
+On Windows, PyPI only publishes CPU builds of PyTorch, and pip has no way to
+pick a package index based on the hardware it is installing on. Any
+dependency on `torch`, direct or through a package such as `accelerate`,
+would therefore download a CPU build that must be replaced right away. For
+this reason, neither `torch`, `torchvision` nor `accelerate` is listed in
+`pyproject.toml`; a test enforces this. `turkmenocr --setup` (or the first
+recognition run) installs the GPU build first and `accelerate` afterwards,
+so pip finds `torch` already satisfied.
+
 ### Why PyTorch is probed in a child process
 
 Once a CPU-only PyTorch is imported, it cannot be replaced within the same
@@ -143,9 +157,21 @@ query for old drivers that lack this field). The choice is made in
 - Otherwise, a driver that supports CUDA 11.8 or newer: `cu118`.
 - Otherwise: the driver is too old (`ENV-002`).
 
-The versions are pinned to `torch==2.7.1+<tag>` and
-`torchvision==0.22.1+<tag>`. The local version suffix forces pip to replace
-an installed CPU build of the same version number.
+The versions are pinned per Python version, because no single PyTorch
+release covers Python 3.9 to 3.14:
+
+- Python 3.9 to 3.13: `torch==2.7.1+<tag>` and `torchvision==0.22.1+<tag>`,
+  with `cu118`, `cu126` and `cu128` builds.
+- Python 3.14: `torch==2.9.1+<tag>` and `torchvision==0.24.1+<tag>`, the
+  oldest release with Python 3.14 wheels, with `cu126` and `cu128` builds.
+  Drivers older than CUDA 12.6 are therefore reported as too old on 3.14.
+
+Both combinations have been verified end to end on a GeForce GTX 1060 6 GB:
+Python 3.13 with PyTorch 2.7.1 and transformers 4.46, and Python 3.14 with
+PyTorch 2.9.1 and transformers 4.47.1.
+
+The local version suffix forces pip to replace an installed CPU build of the
+same version number.
 
 An installed CUDA build is still replaced when its architecture list cannot
 run on the GPU, for example a CUDA 12.8 build on a Pascal card. In that case
@@ -155,8 +181,14 @@ run on the GPU, for example a CUDA 12.8 build on a Pascal card. In that case
 
 The model code uses internal APIs of the `transformers` 4.46 series.
 `importlib.metadata` reads the installed version without importing the
-package. Any 4.46.x release is accepted. Anything else is replaced with
-4.46.0, and import caches are invalidated afterwards. If `transformers` has
+package. On Python 3.9 to 3.13, any 4.46.x release is accepted, and anything
+else is replaced with 4.46.0. On Python 3.14, the 4.47 series is used
+instead (4.47.1 is installed). The `tokenizers` 0.20 line that 4.46 requires
+has no Python 3.14 wheels and would need a Rust compiler. The `tokenizers`
+0.21 line that 4.47 requires ships version-independent (abi3) wheels.
+Version 4.48 removed `Cache.get_max_length()`, which the model code calls,
+so 4.47 is the newest usable series. Import caches are invalidated after an
+installation. If `transformers` has
 already been imported (possible only in library use), it cannot be replaced
 safely, and the user is asked to restart Python (`ENV-006`).
 
@@ -259,7 +291,7 @@ naming works: one file, many shards or renamed files.
 The test suite needs only `pytest` and `pillow`. It builds small synthetic
 safetensors files, fakes `nvidia-smi` and pip results with monkeypatching,
 and checks the full set of 2710 bundled tensor names in memory. CI runs it
-on Linux and Windows for Python 3.9 to 3.13. CI also builds the wheel,
+on Linux and Windows for Python 3.9 to 3.14. CI also builds the wheel,
 checks that every bundled asset is inside it, and runs the installed
 command.
 

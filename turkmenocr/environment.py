@@ -27,17 +27,19 @@ from .diagnostics import Reporter, TurkmenOCRError, format_size
 
 GIB = 1024 ** 3
 
-TRANSFORMERS_TARGET = "4.46.0"
-TRANSFORMERS_SERIES = "4.46."
+# The model code was written against the 4.46 series. Its tokenizers
+# dependency (0.20) has no Python 3.14 wheels, so 3.14 uses 4.47, the last
+# series before Cache.get_max_length(), which the model code calls, was removed.
+TRANSFORMERS_RELEASES: Tuple[Tuple[str, str, Tuple[Tuple[int, int], Tuple[int, int]]], ...] = (
+    ("4.46.", "4.46.0", ((3, 9), (3, 13))),
+    ("4.47.", "4.47.1", ((3, 14), (3, 14))),
+)
 
 # 6 GB cards report slightly less than 6 GiB, so the gate sits a little lower.
 MIN_TOTAL_VRAM = int(5.5 * GIB)
 # Measured peak for a tiled A4 page is about 0.9 GiB above the weights.
 ACTIVATION_RESERVE = int(1.25 * GIB)
 
-TORCH_VERSION = "2.7.1"
-TORCHVISION_VERSION = "0.22.1"
-TORCH_PYTHON_RANGE = ((3, 9), (3, 13))
 
 SUPPORT_PACKAGES: Dict[str, str] = {
     "accelerate": "accelerate>=0.26.0",
@@ -93,10 +95,42 @@ class DriverInfo:
 
 
 @dataclass(frozen=True)
+class TorchRelease:
+    """A pinned PyTorch release and the interpreters and CUDA builds it covers."""
+
+    torch: str
+    torchvision: str
+    python: Tuple[Tuple[int, int], Tuple[int, int]]
+    tags: Tuple[str, ...]
+
+
+# No single release covers every supported Python: 2.7.1 is the newest line
+# validated against transformers 4.46 on 3.9 to 3.13, and 3.14 wheels start
+# with 2.9.
+TORCH_RELEASES: Tuple[TorchRelease, ...] = (
+    TorchRelease("2.7.1", "0.22.1", ((3, 9), (3, 13)), ("cu118", "cu126", "cu128")),
+    TorchRelease("2.9.1", "0.24.1", ((3, 14), (3, 14)), ("cu126", "cu128")),
+)
+SUPPORTED_PYTHON = (
+    min(release.python[0] for release in TORCH_RELEASES),
+    max(release.python[1] for release in TORCH_RELEASES),
+)
+
+
+def torch_release_for(python: Optional[Tuple[int, int]] = None) -> Optional[TorchRelease]:
+    current = python or tuple(sys.version_info[:2])
+    for release in TORCH_RELEASES:
+        low, high = release.python
+        if low <= current <= high:
+            return release
+    return None
+
+
+@dataclass(frozen=True)
 class TorchWheel:
     tag: str
-    torch: str = TORCH_VERSION
-    torchvision: str = TORCHVISION_VERSION
+    torch: str
+    torchvision: str
 
     @property
     def index_url(self) -> str:
@@ -104,6 +138,11 @@ class TorchWheel:
 
     def requirements(self) -> List[str]:
         return [f"torch=={self.torch}+{self.tag}", f"torchvision=={self.torchvision}+{self.tag}"]
+
+    @property
+    def cuda_label(self) -> str:
+        digits = self.tag[2:]
+        return f"CUDA {digits[:-1]}.{digits[-1]}"
 
     def manual_command(self) -> str:
         return (
@@ -220,23 +259,31 @@ def query_driver() -> Optional[DriverInfo]:
 
 
 def select_torch_wheel(
-    cuda_version: Optional[Tuple[int, int]], capability: Optional[Tuple[int, int]]
+    cuda_version: Optional[Tuple[int, int]],
+    capability: Optional[Tuple[int, int]],
+    python: Optional[Tuple[int, int]] = None,
 ) -> Optional[TorchWheel]:
-    """Choose the PyTorch CUDA build that both the driver and the GPU support.
+    """Choose the PyTorch CUDA build that the driver, the GPU and Python support.
 
     Blackwell GPUs (compute capability 10.0 and newer) need the CUDA 12.8 build.
     Every older generation down to Maxwell is covered by the CUDA 12.6 build,
-    or by the CUDA 11.8 build when the driver predates CUDA 12.6.
+    or by the CUDA 11.8 build when the driver predates CUDA 12.6 and the
+    release for this Python still publishes one.
     """
-    if cuda_version is None:
+    release = torch_release_for(python)
+    if release is None or cuda_version is None:
         return None
     if capability is not None and capability >= (10, 0):
-        return TorchWheel("cu128") if cuda_version >= (12, 8) else None
-    if cuda_version >= (12, 6):
-        return TorchWheel("cu126")
-    if cuda_version >= (11, 8):
-        return TorchWheel("cu118")
-    return None
+        tag = "cu128" if cuda_version >= (12, 8) else None
+    elif cuda_version >= (12, 6):
+        tag = "cu126"
+    elif cuda_version >= (11, 8):
+        tag = "cu118"
+    else:
+        tag = None
+    if tag is None or tag not in release.tags:
+        return None
+    return TorchWheel(tag, release.torch, release.torchvision)
 
 
 def arch_supported(capability: Optional[Tuple[int, int]], arch_list: Sequence[str]) -> bool:
@@ -292,9 +339,9 @@ def _last_line(text: str) -> str:
 
 
 def check_python_version() -> None:
-    low, high = TORCH_PYTHON_RANGE
-    current = sys.version_info[:2]
-    if low <= current <= high:
+    low, high = SUPPORTED_PYTHON
+    current = tuple(sys.version_info[:2])
+    if torch_release_for(current) is not None:
         return
     raise TurkmenOCRError(
         "ENV-007",
@@ -310,6 +357,7 @@ def check_python_version() -> None:
             "py -3.12 -m venv turkmenocr-env (Windows) or python3.12 -m venv turkmenocr-env (Linux).",
             "Activate it: turkmenocr-env\\Scripts\\activate (Windows) or source turkmenocr-env/bin/activate (Linux).",
             "pip install turkmenOCR-lib",
+            "turkmenocr --setup",
         ],
     )
 
@@ -368,13 +416,14 @@ def check_total_vram(gpu: GpuInfo, total_bytes: Optional[int] = None) -> None:
     )
 
 
-def ensure_torch(driver: DriverInfo, gpu: GpuInfo, auto_install: bool, reporter: Reporter) -> None:
+def ensure_torch(driver: DriverInfo, gpu: GpuInfo, auto_install: bool, reporter: Reporter) -> TorchProbe:
     """Make sure a PyTorch build that can use this GPU is installed."""
     probe = probe_torch()
     reason = _torch_problem(probe, gpu)
     if reason is None:
-        return
+        return probe
 
+    check_python_version()
     wheel = select_torch_wheel(driver.cuda_version, gpu.compute_capability)
     if wheel is None:
         cuda_text = (
@@ -395,11 +444,10 @@ def ensure_torch(driver: DriverInfo, gpu: GpuInfo, auto_install: bool, reporter:
     if not auto_install:
         raise _install_disabled_error("PyTorch with GPU support", reason, wheel.manual_command())
 
-    check_python_version()
     reporter.info(
-        f"{reason} Installing the GPU-enabled PyTorch {wheel.torch} build "
-        f"({wheel.tag}). This is a one-time download of about 3 GB and can take "
-        "several minutes."
+        f"{reason} Installing PyTorch {wheel.torch} built for {wheel.cuda_label}, "
+        "the best match for this graphics card and driver. This is a one-time "
+        "download of about 3 GB and can take several minutes."
     )
     completed = pip_install(
         wheel.requirements()
@@ -409,7 +457,7 @@ def ensure_torch(driver: DriverInfo, gpu: GpuInfo, auto_install: bool, reporter:
         importlib.invalidate_caches()
         probe = probe_torch()
         if _torch_problem(probe, gpu) is None:
-            return
+            return probe
         detail = probe.error or "PyTorch still cannot use the graphics card after installation"
     else:
         detail = _last_line(completed.stderr or completed.stdout)
@@ -478,18 +526,28 @@ def installed_transformers_version() -> Optional[str]:
         return None
 
 
+def transformers_requirement(python: Optional[Tuple[int, int]] = None) -> Tuple[str, str]:
+    """The accepted transformers series and the version to install for a Python."""
+    current = python or tuple(sys.version_info[:2])
+    for series, target, (low, high) in TRANSFORMERS_RELEASES:
+        if low <= current <= high:
+            return series, target
+    return TRANSFORMERS_RELEASES[-1][:2]
+
+
 def ensure_transformers(auto_install: bool, reporter: Reporter) -> None:
-    """Align transformers with the 4.46 series the model code depends on."""
+    """Align transformers with the series the model code supports on this Python."""
+    series, target = transformers_requirement()
     current = installed_transformers_version()
-    if current is not None and current.startswith(TRANSFORMERS_SERIES):
+    if current is not None and current.startswith(series):
         return
-    manual = f"python -m pip install transformers=={TRANSFORMERS_TARGET}"
+    manual = f"python -m pip install transformers=={target}"
     found = f"version {current} is installed" if current else "it is not installed"
     if "transformers" in sys.modules:
         raise TurkmenOCRError(
             "ENV-006",
-            f"transformers {TRANSFORMERS_TARGET} is required, but another version is already loaded.",
-            f"TurkmenOCR relies on internal parts of transformers {TRANSFORMERS_TARGET}, "
+            f"transformers {target} is required, but another version is already loaded.",
+            f"TurkmenOCR relies on internal parts of transformers {target}, "
             f"but {found} and it has already been loaded into the running Python "
             "program, so it cannot be replaced while the program is running.",
             "Run the command below, then restart Python (or your notebook kernel) "
@@ -498,22 +556,22 @@ def ensure_transformers(auto_install: bool, reporter: Reporter) -> None:
         )
     if not auto_install:
         raise _install_disabled_error(
-            f"transformers {TRANSFORMERS_TARGET}",
-            f"TurkmenOCR needs transformers {TRANSFORMERS_TARGET}, but {found}.",
+            f"transformers {target}",
+            f"TurkmenOCR needs transformers {target}, but {found}.",
             manual,
         )
     reporter.info(
-        f"TurkmenOCR needs transformers {TRANSFORMERS_TARGET} ({found}), so it is being installed now."
+        f"TurkmenOCR needs transformers {target} ({found}), so it is being installed now."
     )
-    completed = pip_install([f"transformers=={TRANSFORMERS_TARGET}"])
+    completed = pip_install([f"transformers=={target}"])
     importlib.invalidate_caches()
     installed = installed_transformers_version()
-    if completed.returncode == 0 and installed and installed.startswith(TRANSFORMERS_SERIES):
+    if completed.returncode == 0 and installed and installed.startswith(series):
         return
     raise TurkmenOCRError(
         "ENV-006",
-        f"transformers {TRANSFORMERS_TARGET} could not be installed automatically.",
-        f"TurkmenOCR relies on internal parts of transformers {TRANSFORMERS_TARGET}, "
+        f"transformers {target} could not be installed automatically.",
+        f"TurkmenOCR relies on internal parts of transformers {target}, "
         f"but {found}. The automatic installation failed, most likely because "
         "there is no internet connection or because this Python installation is "
         "write-protected. The installer reported: "
@@ -608,6 +666,52 @@ def check_memory(
     )
 
 
+def describe_gpu(driver: DriverInfo, gpu: GpuInfo) -> str:
+    capability = (
+        f", compute capability {gpu.compute_capability[0]}.{gpu.compute_capability[1]}"
+        if gpu.compute_capability
+        else ""
+    )
+    cuda = (
+        f"supports CUDA up to {driver.cuda_version[0]}.{driver.cuda_version[1]}"
+        if driver.cuda_version
+        else "does not report a CUDA version"
+    )
+    return (
+        f"Found graphics card {gpu.index}: {gpu.name} with {format_size(gpu.total_bytes)} "
+        f"of video memory{capability}. NVIDIA driver {gpu.driver_version} {cuda}."
+    )
+
+
+def prepare_packages(
+    device_index: int = 0,
+    auto_install: bool = True,
+    ignore_vram_check: bool = False,
+    reporter: Optional[Reporter] = None,
+) -> Tuple[DriverInfo, GpuInfo, TorchProbe]:
+    """Find the GPU and make sure every runtime package suits it."""
+    reporter = reporter or Reporter(quiet=True)
+    driver, gpu = require_gpu(device_index)
+    if not ignore_vram_check:
+        check_total_vram(gpu)
+    reporter.info(describe_gpu(driver, gpu))
+    probe = ensure_torch(driver, gpu, auto_install, reporter)
+    ensure_support_packages(auto_install, reporter)
+    ensure_transformers(auto_install, reporter)
+    importlib.invalidate_caches()
+    return driver, gpu, probe
+
+
+def setup_runtime(device_index: int = 0, auto_install: bool = True, reporter: Optional[Reporter] = None) -> str:
+    """Prepare the runtime ahead of the first OCR run and summarise the result."""
+    _, gpu, probe = prepare_packages(device_index, auto_install, False, reporter)
+    return (
+        f"Setup is complete. PyTorch {probe.version} (CUDA {probe.cuda_build}) and "
+        f"transformers {installed_transformers_version()} are installed, and the "
+        f"{gpu.name} is ready for TurkmenOCR."
+    )
+
+
 def prepare_environment(
     required_bytes: int,
     minimum_bytes: Optional[int] = None,
@@ -617,14 +721,6 @@ def prepare_environment(
     reporter: Optional[Reporter] = None,
 ) -> RuntimeSettings:
     """Verify the GPU and install or align runtime packages as needed."""
-    reporter = reporter or Reporter(quiet=True)
-    driver, gpu = require_gpu(device_index)
-    if not ignore_vram_check:
-        check_total_vram(gpu)
-    reporter.info(f"Using graphics card {gpu.index}: {gpu.name} ({format_size(gpu.total_bytes)}).")
-    ensure_torch(driver, gpu, auto_install, reporter)
-    ensure_support_packages(auto_install, reporter)
-    ensure_transformers(auto_install, reporter)
-    importlib.invalidate_caches()
+    _, gpu, _ = prepare_packages(device_index, auto_install, ignore_vram_check, reporter)
     minimum = required_bytes if minimum_bytes is None else minimum_bytes
     return check_memory(gpu, device_index, required_bytes, minimum, ignore_vram_check)

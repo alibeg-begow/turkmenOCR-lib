@@ -105,3 +105,18 @@ def test_version(capsys):
         main(["--version"])
     assert excinfo.value.code == 0
     assert __version__ in capsys.readouterr().out
+
+
+def test_setup_needs_no_paths(monkeypatch, capsys):
+    monkeypatch.setattr("turkmenocr.environment.setup_runtime", lambda gpu, auto, reporter: "Setup is complete.")
+    assert main(["--setup"]) == 0
+    captured = capsys.readouterr()
+    assert "Setup is complete." in captured.err
+    assert captured.out == ""
+
+
+def test_missing_image_is_named(tmp_path, capsys):
+    assert main(["-path", str(tmp_path)]) == EXIT_INPUT
+    err = capsys.readouterr().err
+    assert "Error [INPUT-000]" in err
+    assert "-img/--img" in err

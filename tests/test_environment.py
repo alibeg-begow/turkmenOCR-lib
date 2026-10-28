@@ -49,28 +49,42 @@ def test_parse_gpu_csv_with_and_without_compute_capability():
 
 
 @pytest.mark.parametrize(
-    "cuda, capability, tag",
+    "cuda, capability, python, tag",
     [
-        ((13, 0), (12, 0), "cu128"),
-        ((12, 8), (10, 0), "cu128"),
-        ((12, 4), (12, 0), None),
-        ((13, 0), (8, 6), "cu126"),
-        ((12, 6), (6, 1), "cu126"),
-        ((12, 2), (7, 5), "cu118"),
-        ((11, 8), None, "cu118"),
-        ((11, 4), (7, 5), None),
-        (None, (8, 6), None),
+        ((13, 0), (12, 0), (3, 12), "cu128"),
+        ((12, 8), (10, 0), (3, 9), "cu128"),
+        ((12, 4), (12, 0), (3, 12), None),
+        ((13, 0), (8, 6), (3, 12), "cu126"),
+        ((12, 6), (6, 1), (3, 13), "cu126"),
+        ((12, 2), (7, 5), (3, 10), "cu118"),
+        ((11, 8), None, (3, 11), "cu118"),
+        ((11, 4), (7, 5), (3, 12), None),
+        (None, (8, 6), (3, 12), None),
+        ((13, 0), (6, 1), (3, 14), "cu126"),
+        ((13, 0), (12, 0), (3, 14), "cu128"),
+        ((12, 2), (7, 5), (3, 14), None),
+        ((13, 0), (8, 6), (3, 15), None),
     ],
 )
-def test_select_torch_wheel(cuda, capability, tag):
-    wheel = select_torch_wheel(cuda, capability)
+def test_select_torch_wheel(cuda, capability, python, tag):
+    wheel = select_torch_wheel(cuda, capability, python)
     assert (wheel.tag if wheel else None) == tag
 
 
-def test_wheel_requirements_pin_local_cuda_version():
-    wheel = select_torch_wheel((12, 6), (8, 6))
-    assert wheel.requirements() == ["torch==2.7.1+cu126", "torchvision==0.22.1+cu126"]
+@pytest.mark.parametrize(
+    "python, torch, torchvision",
+    [((3, 9), "2.7.1", "0.22.1"), ((3, 13), "2.7.1", "0.22.1"), ((3, 14), "2.9.1", "0.24.1")],
+)
+def test_wheel_requirements_pin_local_cuda_version(python, torch, torchvision):
+    wheel = select_torch_wheel((12, 6), (8, 6), python)
+    assert wheel.requirements() == [f"torch=={torch}+cu126", f"torchvision=={torchvision}+cu126"]
     assert wheel.index_url.endswith("/cu126")
+
+
+def test_every_python_from_3_9_to_3_14_has_a_release():
+    for minor in range(9, 15):
+        assert environment.torch_release_for((3, minor)) is not None
+    assert environment.torch_release_for((3, 8)) is None
 
 
 def test_arch_supported():
@@ -166,7 +180,8 @@ def test_torch_is_installed_for_cpu_only_build(monkeypatch):
     monkeypatch.setattr(environment, "probe_torch", lambda: next(probes))
     monkeypatch.setattr(environment, "pip_install", lambda args: calls.append(list(args)) or completed())
     environment.ensure_torch(DriverInfo([RTX_3060], (12, 6)), RTX_3060, True, QUIET)
-    assert calls[0][:2] == ["torch==2.7.1+cu126", "torchvision==0.22.1+cu126"]
+    release = environment.torch_release_for()
+    assert calls[0][:2] == [f"torch=={release.torch}+cu126", f"torchvision=={release.torchvision}+cu126"]
 
 
 def test_failed_torch_install(monkeypatch):
@@ -178,20 +193,30 @@ def test_failed_torch_install(monkeypatch):
     assert "network down" in excinfo.value.explanation
 
 
+@pytest.mark.parametrize(
+    "python, series, target",
+    [((3, 9), "4.46.", "4.46.0"), ((3, 13), "4.46.", "4.46.0"), ((3, 14), "4.47.", "4.47.1")],
+)
+def test_transformers_requirement_per_python(python, series, target):
+    assert environment.transformers_requirement(python) == (series, target)
+
+
 def test_transformers_patch_release_is_accepted(monkeypatch):
-    monkeypatch.setattr(environment, "installed_transformers_version", lambda: "4.46.3")
+    series, _ = environment.transformers_requirement()
+    monkeypatch.setattr(environment, "installed_transformers_version", lambda: series + "9")
     monkeypatch.setattr(environment, "pip_install", lambda args: pytest.fail("must not install"))
     environment.ensure_transformers(True, QUIET)
 
 
 def test_transformers_is_pinned(monkeypatch):
-    versions = iter(["4.57.1", "4.46.0"])
+    _, target = environment.transformers_requirement()
+    versions = iter(["4.57.1", target])
     calls = []
     monkeypatch.setattr(environment, "installed_transformers_version", lambda: next(versions))
     monkeypatch.setattr(environment, "pip_install", lambda args: calls.append(list(args)) or completed())
     monkeypatch.delitem(environment.sys.modules, "transformers", raising=False)
     environment.ensure_transformers(True, QUIET)
-    assert calls == [["transformers==4.46.0"]]
+    assert calls == [[f"transformers=={target}"]]
 
 
 def test_transformers_install_failure(monkeypatch):
@@ -201,11 +226,48 @@ def test_transformers_install_failure(monkeypatch):
     with pytest.raises(TurkmenOCRError) as excinfo:
         environment.ensure_transformers(True, QUIET)
     assert excinfo.value.code == "ENV-006"
-    assert excinfo.value.steps == ["python -m pip install transformers==4.46.0"]
+    assert excinfo.value.steps == [f"python -m pip install transformers=={environment.transformers_requirement()[1]}"]
 
 
 def test_python_version_gate(monkeypatch):
-    monkeypatch.setattr(environment.sys, "version_info", (3, 14, 0, "final", 0))
+    monkeypatch.setattr(environment.sys, "version_info", (3, 15, 0, "final", 0))
     with pytest.raises(TurkmenOCRError) as excinfo:
         environment.check_python_version()
     assert excinfo.value.code == "ENV-007"
+
+
+def test_describe_gpu_reports_driver_cuda_and_capability():
+    text = environment.describe_gpu(DriverInfo([GTX_1060], (13, 0)), GTX_1060)
+    assert "GTX 1060 with 6.0 GB" in text
+    assert "compute capability 6.1" in text
+    assert "driver 582.28 supports CUDA up to 13.0" in text
+
+
+def test_cuda_label():
+    assert select_torch_wheel((12, 6), (8, 6), (3, 12)).cuda_label == "CUDA 12.6"
+    assert select_torch_wheel((12, 2), (8, 6), (3, 12)).cuda_label == "CUDA 11.8"
+
+
+def test_setup_runtime_summary(monkeypatch):
+    good = TorchProbe(installed=True, version="2.7.1+cu126", cuda_build="12.6", cuda_available=True,
+                      arch_list=["sm_86"], torchvision="0.22.1")
+    monkeypatch.setattr(environment, "query_driver", lambda: DriverInfo([RTX_3060], (12, 6)))
+    monkeypatch.setattr(environment, "probe_torch", lambda: good)
+    monkeypatch.setattr(environment, "ensure_support_packages", lambda auto, reporter: None)
+    monkeypatch.setattr(environment, "ensure_transformers", lambda auto, reporter: None)
+    monkeypatch.setattr(environment, "installed_transformers_version", lambda: "4.46.0")
+    summary = environment.setup_runtime(0, True, QUIET)
+    assert "PyTorch 2.7.1+cu126 (CUDA 12.6)" in summary
+    assert "transformers 4.46.0" in summary
+
+
+def test_pip_install_never_pulls_torch():
+    # PyPI only offers CPU builds of torch on Windows, so neither torch nor a
+    # package that depends on it may be an install-time dependency.
+    import pathlib
+    import re
+
+    pyproject = (pathlib.Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    block = re.search(r"^dependencies = \[(.*?)^\]", pyproject, re.S | re.M).group(1)
+    names = {re.match(r'\s*"([A-Za-z0-9_.-]+)', line).group(1).lower() for line in block.splitlines() if '"' in line}
+    assert not names & {"torch", "torchvision", "accelerate"}

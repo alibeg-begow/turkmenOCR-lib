@@ -68,7 +68,7 @@ organised and [docs/RELEASING.md](docs/RELEASING.md) for the release process.
 3. Open a pull request that describes what changed and why. If the change
    affects model loading or inference, say how you tested it on a GPU.
 
-The CI checks (lint, tests on Linux and Windows for Python 3.9 to 3.13, and
+The CI checks (lint, tests on Linux and Windows for Python 3.9 to 3.14, and
 the package build) must pass before a pull request can be merged.
 
 ## License

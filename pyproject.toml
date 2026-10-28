@@ -27,13 +27,14 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Image Recognition",
     "Topic :: Text Processing :: Linguistic",
 ]
 dependencies = [
     "pillow>=9.0",
-    "transformers>=4.46.0,<4.47",
-    "accelerate>=0.26.0",
+    "transformers>=4.46.0,<4.47; python_version < '3.14'",
+    "transformers>=4.47.1,<4.48; python_version >= '3.14'",
     "safetensors>=0.4.3",
     "einops",
     "addict",
