@@ -82,7 +82,7 @@ jobs:
           /tmp/smoke/bin/pip install --no-deps dist/*.whl pillow
           /tmp/smoke/bin/turkmenocr --version
           /tmp/smoke/bin/turkmenocr --help
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
