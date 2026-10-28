@@ -45,6 +45,9 @@ run of an unchanged version is skipped without failing.
    git push origin v0.1.0
    ```
 
+   The tag must contain the full version: `v0.1.0` matches version `0.1.0`,
+   while `v0.1` does not and stops the workflow before anything is uploaded.
+
 4. The workflow checks that the tag matches the version, builds the
    package, publishes it to TestPyPI and then PyPI, and creates a GitHub
    release with the built files attached.

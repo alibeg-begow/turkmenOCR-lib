@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a problem with installing or running turkmenOCR-lib.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not attach model weights or images that
+        contain personal information.
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact command you ran, with --debug added at the end.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Complete output
+      description: Everything the command printed, including the error message and traceback.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: nvidia-smi
+    attributes:
+      label: Output of nvidia-smi
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: turkmenOCR-lib version
+      description: Output of turkmenocr --version
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and Python version
+      placeholder: Windows 11, Python 3.12.7
+    validations:
+      required: true

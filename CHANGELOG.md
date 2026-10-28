@@ -3,7 +3,9 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and the project uses Semantic Versioning.
 
-## [0.1.0] - Unreleased
+## [Unreleased]
+
+## [0.1.0] - 2026-10-28
 
 ### Added
 
@@ -14,3 +16,5 @@ follows Keep a Changelog, and the project uses Semantic Versioning.
 - Plain-text, three-paragraph diagnostics for every anticipated failure.
 - Graphics cards with 6 GB of video memory are supported: when the model does
   not fit, part of the mixture-of-experts weights runs on the CPU.
+
+[0.1.0]: https://github.com/alibeg-begow/turkmenOCR-lib/releases/tag/v0.1.0

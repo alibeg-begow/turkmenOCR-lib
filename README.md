@@ -209,8 +209,11 @@ pytest
 ```
 
 The tests do not need a graphics card, PyTorch or the model weights. See
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request,
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the library is built and
 [docs/RELEASING.md](docs/RELEASING.md) for how releases are published.
+Security problems should be reported privately as described in
+[SECURITY.md](SECURITY.md).
 
 ## License
 
